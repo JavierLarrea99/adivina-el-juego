@@ -463,8 +463,13 @@ function prepareGames(raw) {
   });
   BY_ID = new Map(GAMES.map((g) => [g.id, g]));
 }
+// Para escribir en español: "pokemon rojo" encuentra "Pokémon Red"
+const ES = { rojo: "red", azul: "blue", amarillo: "yellow", oro: "gold", plata: "silver", cristal: "crystal",
+  rubi: "ruby", zafiro: "sapphire", esmeralda: "emerald", diamante: "diamond", perla: "pearl", platino: "platinum",
+  negro: "black", blanco: "white", espada: "sword", escudo: "shield", escarlata: "scarlet", purpura: "violet",
+  sol: "sun", luna: "moon", verde: "green", hoja: "leaf", fuego: "fire" };
 function search(q, limit = 8) {
-  const nq = norm(q);
+  const nq = norm(q).split(" ").map((w) => ES[w] || w).join(" ");
   if (nq.length < 2 && !/^\d$/.test(nq)) return [];
   const qt = nq.split(" ");
   const qc = qt.join("");
