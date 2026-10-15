@@ -18,6 +18,7 @@ const MAX_GAMES = 3200;
 const SHOTS_PER_GAME = 6;
 const DELAY_MS = 1600; // Steam permite ~200 peticiones cada 5 minutos por IP
 const OCR_PARALLEL = 4;
+const SHARD_BUDGET_MS = 95 * 60 * 1000; // cada trozo guarda lo que tenga antes del límite de GitHub
 
 // Programas que Steam marca como "juego" pero no lo son
 const NOT_GAMES = /wallpaper engine|soundpad|rpg maker|gamemaker studio|vtube studio|lossless scaling|steamvr|source sdk|dedicated server|playtest|benchmark|\bdemo\b|soundtrack|blender|aseprite|krita|clip studio/i;
@@ -64,7 +65,7 @@ async function getJson(url, { tries = 6 } = {}) {
   const shown = url.replace(/key=[^&]+/, "key=***");
   for (let i = 0; i < tries; i++) {
     try {
-      const res = await fetch(url, { headers: { "User-Agent": "adivina-el-juego/1.0" } });
+      const res = await fetch(url, { headers: { "User-Agent": "adivina-el-juego/1.0" }, signal: AbortSignal.timeout(30000) });
       if (res.status === 429 || res.status === 403 || res.status >= 500) {
         const wait = 30000 * (i + 1);
         console.log(`  ${res.status} en ${shown}, espero ${wait / 1000}s`);
@@ -119,12 +120,12 @@ function smallUrl(u) {
 }
 async function ocr(url) {
   try {
-    const res = await fetch(smallUrl(url));
+    const res = await fetch(smallUrl(url), { signal: AbortSignal.timeout(15000) });
     if (!res.ok) return null;
     const f = path.join(os.tmpdir(), `shot-${process.pid}-${Math.random().toString(36).slice(2)}.jpg`);
     fs.writeFileSync(f, Buffer.from(await res.arrayBuffer()));
     const text = await new Promise((r) =>
-      execFile("tesseract", [f, "stdout", "--psm", "11", "-l", "eng"], { timeout: 30000 }, (e, out) => r(e ? "" : out))
+      execFile("tesseract", [f, "stdout", "--psm", "11", "-l", "eng"], { timeout: 30000, env: { ...process.env, OMP_THREAD_LIMIT: "1" } }, (e, out) => r(e ? "" : out))
     );
     fs.rmSync(f, { force: true });
     return text;
@@ -269,10 +270,15 @@ async function shard(i, n) {
   const mine = list.filter((_, k) => k % n === i);
   const out = [];
   let done = 0;
+  const t0 = Date.now();
   for (const c of mine) {
+    if (Date.now() - t0 > SHARD_BUDGET_MS) { console.log(`trozo ${i}: se acaba el tiempo, guardo lo que hay`); break; }
     const g = c.src === "steam" ? await steamGame(c) : await rawgGame(c);
     if (g) out.push(g);
-    if (++done % 25 === 0) console.log(`trozo ${i}: ${done}/${mine.length} revisados, ${out.length} juegos`);
+    if (++done % 25 === 0) {
+      console.log(`trozo ${i}: ${done}/${mine.length} revisados, ${out.length} juegos`);
+      fs.writeFileSync(`part-${i}.json`, JSON.stringify(out));
+    }
   }
   fs.writeFileSync(`part-${i}.json`, JSON.stringify(out));
   console.log(`trozo ${i}: ${out.length} juegos guardados de ${mine.length}`);
