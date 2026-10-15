@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: 20
       - run: node scripts/juegos.mjs candidates
+        env:
+          RAWG_KEY: ${{ secrets.RAWG_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: candidates
@@ -31,11 +33,11 @@ jobs:
   shard:
     needs: candidates
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        i: [0, 1, 2, 3, 4, 5, 6, 7]
+        i: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,7 +46,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: candidates
-      - run: node scripts/juegos.mjs shard ${{ matrix.i }} 8
+      - name: Instalar lector de texto (OCR)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-eng
+      - run: node scripts/juegos.mjs shard ${{ matrix.i }} 12
       - uses: actions/upload-artifact@v4
         with:
           name: part-${{ matrix.i }}

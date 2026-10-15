@@ -348,7 +348,7 @@ footer a { color: inherit; }
     </div>
   </main>
 
-  <footer>Capturas y nombres de Steam. Cada juego pertenece a sus autores. Lista actualizada: <span id="dbDate">—</span></footer>
+  <footer>Capturas de Steam y de <a href="https://rawg.io" target="_blank" rel="noopener">RAWG</a>. Cada juego pertenece a sus autores. Lista actualizada: <span id="dbDate">—</span></footer>
 </div>
 <div class="toast" id="toast" hidden></div>
 
@@ -414,14 +414,18 @@ function norm(s) {
 function shotUrl(id, s) {
   if (!s.includes("|")) return s;
   const [h, st, file] = s.split("|");
+  if (h === "r") return `https://media.rawg.io/media/resize/1280/-/${file}`;
   const host = h === "a" ? "shared.akamai.steamstatic.com" : h === "f" ? "shared.fastly.steamstatic.com" : h;
   return `https://${host}/${st === "1" ? "store_item_assets/" : ""}steam/apps/${id}/${file}`;
 }
 // Ediciones del mismo juego cuentan como el mismo: "GTA V Legacy" = "GTA V Enhanced"
-const EDITION = /\b(legacy|enhanced edition|enhanced|remastered|remaster|special edition|definitive edition|game of the year edition|goty edition|goty|complete edition|anniversary edition|directors cut|intergrade)\b/g;
+const EDITION = /\b(legacy|enhanced edition|enhanced|remastered|remaster|special edition|definitive edition|game of the year edition|goty edition|goty|complete edition|anniversary edition|directors cut|intergrade|deluxe)\b/g;
 const EXTRA = { "counter strike 2": ["csgo", "cs go", "counter strike global offensive"] };
+function meta(g) {
+  return [g.year, g.plat && g.plat !== "PC" ? g.plat : ""].filter(Boolean).join(" · ");
+}
 function prepareGames(raw) {
-  GAMES = raw.map(([id, name, year, ss], rank) => {
+  GAMES = raw.map(([id, name, year, ss, plat], rank) => {
     const n = norm(name);
     const tok = n.split(" ");
     const compact = tok.join("");
@@ -436,7 +440,13 @@ function prepareGames(raw) {
       if (letters.length >= 2) keys.add(letters);
     }
     // nombre sin subtítulo: "the witcher 3 wild hunt" -> también "the witcher 3"
-    const main = norm(name.split(/[:\u2013\u2014]| - /)[0]);
+    const parts = name.split(/[:\u2013\u2014]| - /);
+    const main = norm(parts[0]);
+    // siglas del subtítulo: "Zelda: Breath of the Wild" -> botw, "Ocarina of Time" -> oot
+    if (parts.length > 1) {
+      const sub = norm(parts.slice(1).join(" ")).split(" ").filter(Boolean);
+      if (sub.length >= 2) keys.add(sub.map((w) => (/^\d+$/.test(w) ? w : w[0])).join(""));
+    }
     if (main && main !== n) keys.add(main.replace(/ /g, ""));
     // apodos de sagas que la gente usa
     for (const [phrase, abbr] of SAGAS) {
@@ -449,7 +459,7 @@ function prepareGames(raw) {
     for (const a of EXTRA[base] || []) keys.add(a.replace(/ /g, ""));
     // "gtav", "rdrii": el número también como romano
     for (const k of [...keys]) { const m = k.match(/^(.*?)(\d+)$/); if (m && TO_ROMAN[m[2]]) keys.add(m[1] + TO_ROMAN[m[2]]); }
-    return { id, name, year, rank, ss: ss.map((s) => shotUrl(id, s)), n, base, tok, compact, keys: [...keys] };
+    return { id, name, year, plat: plat || "PC", rank, ss: ss.map((s) => shotUrl(id, s)), n, base, tok, compact, keys: [...keys] };
   });
   BY_ID = new Map(GAMES.map((g) => [g.id, g]));
 }
@@ -481,7 +491,7 @@ async function loadGames() {
     $("dbDate").textContent = data.updated || "—";
   } catch (e) { GAMES = []; }
   $("dbInfo").textContent = GAMES.length
-    ? `${GAMES.length.toLocaleString("es-ES")} juegos de Steam con capturas reales.`
+    ? `${GAMES.length.toLocaleString("es-ES")} juegos de PC y consolas, desde la NES hasta hoy.`
     : "La lista de juegos todavía se está generando. Vuelve a cargar la página en unos minutos.";
   $("createBtn").disabled = !GAMES.length;
   $("joinBtn").disabled = !GAMES.length;
@@ -670,8 +680,7 @@ const Host = {
     const g = pool[Math.floor(Math.random() * pool.length)];
     this.used.add(g.base);
     // la primera captura de Steam suele ser arte con el logo: mejor evitarla
-    const from = g.ss.length > 2 ? 1 : 0;
-    const img = g.ss[from + Math.floor(Math.random() * (g.ss.length - from))];
+    const img = g.ss[Math.floor(Math.random() * g.ss.length)];
     return { gameId: g.id, img };
   },
 
@@ -743,7 +752,7 @@ const Host = {
     clearTimeout(this.timer);
     const g = BY_ID.get(this.current.gameId);
     const winners = [...this.players.values()].filter((p) => p.gain > 0).sort((a, b) => b.gain - a.gain).map((p) => ({ id: p.id, pts: p.gain }));
-    this.reveal = { gameId: g.id, name: g.name, year: g.year, img: this.current.img, skipped, winners };
+    this.reveal = { gameId: g.id, name: g.name, year: g.year, plat: g.plat, img: this.current.img, skipped, winners };
     const ranked = [...this.players.values()].sort((a, b) => b.score - a.score);
     const top = ranked[0];
     const isOver = top && top.score >= this.settings.target && (!ranked[1] || ranked[1].score < top.score);
@@ -908,7 +917,7 @@ function renderStage(s) {
       const p = s.players.find((x) => x.id === w.id);
       return p ? `<span>${esc(p.name)} <b>+${w.pts}</b></span>` : "";
     }).join("");
-    ov.innerHTML = `<div class="reveal-card"><div class="eyebrow">${r.skipped ? "Saltada · era" : "Era"}</div><h2>${esc(r.name)}</h2>${r.year ? `<div class="year">${r.year}</div>` : ""}<div class="who">${who || `<span>Nadie lo ha adivinado</span>`}</div></div>`;
+    ov.innerHTML = `<div class="reveal-card"><div class="eyebrow">${r.skipped ? "Saltada · era" : "Era"}</div><h2>${esc(r.name)}</h2>${meta(r) ? `<div class="year">${meta(r)}</div>` : ""}<div class="who">${who || `<span>Nadie lo ha adivinado</span>`}</div></div>`;
     lockGuess(true);
     closeSuggest();
     $("skipBtn").disabled = true;
@@ -961,7 +970,7 @@ function openSuggest(list) {
   sugg = list; sel = 0;
   const ul = $("suggest");
   if (!list.length) { closeSuggest(); return; }
-  ul.innerHTML = list.map((g, i) => `<li role="option" id="opt${i}" data-i="${i}" aria-selected="${i === sel}"><span>${esc(g.name)}</span><small>${g.year || ""}</small></li>`).join("");
+  ul.innerHTML = list.map((g, i) => `<li role="option" id="opt${i}" data-i="${i}" aria-selected="${i === sel}"><span>${esc(g.name)}</span><small>${meta(g)}</small></li>`).join("");
   ul.hidden = false;
   $("guessInput").setAttribute("aria-expanded", "true");
   $("guessInput").setAttribute("aria-activedescendant", "opt0");
