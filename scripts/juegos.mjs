@@ -14,7 +14,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 
 const STEAM_CANDIDATES = 2600; // se piden más de los que se quedan, porque algunos se descartan
-const MAX_GAMES = 3200;
+const MAX_GAMES = 4200;
 const SHOTS_PER_GAME = 6;
 const DELAY_MS = 1600; // Steam permite ~200 peticiones cada 5 minutos por IP
 const OCR_PARALLEL = 4;
@@ -210,7 +210,8 @@ async function rawgCandidates(key) {
         if (pos >= quota) break;
         // Los juegos que también están en PC casi siempre salen ya de Steam: no gastan cupo
         const onPc = (g.platforms || []).some((p) => p.platform?.slug === "pc");
-        const pct = offset + (pos / quota) * mult;
+        // Los que también están en PC van al final: así, si existe en Steam, gana la versión de Steam
+        const pct = offset + (pos / quota) * mult + (onPc && !wantPc ? 1 : 0);
         if (wantPc || !onPc) pos++;
         if (seen.has(g.id)) continue;
         if (g.esrb_rating?.slug === "adults-only") continue;
