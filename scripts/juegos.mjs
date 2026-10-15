@@ -59,6 +59,17 @@ const RAWG_PLATFORMS = [
   [["pc"], "PC", 150, "&dates=1980-01-01,2006-12-31"], // clásicos de PC
 ];
 
+// Cuánto pesa cada consola al mezclar por fama: 1 = sus mejores juegos entran entre los "muy famosos"
+const FAME = {
+  "Switch": [1, 0], "Wii": [1, 0], "Nintendo 64": [1, 0], "Super Nintendo": [1, 0], "NES": [1, 0],
+  "PlayStation": [1, 0], "PlayStation 2": [1, 0], "Game Boy Advance": [1, 0], "Nintendo DS": [1, 0],
+  "GameCube": [1.5, 0.02], "Wii U": [1.5, 0.02], "Nintendo 3DS": [1.5, 0.02], "PlayStation 3": [1.5, 0.02],
+  "PlayStation 4": [1.5, 0.02], "PlayStation 5": [1.5, 0.02], "PSP": [1.5, 0.02], "Xbox 360": [1.5, 0.02],
+  "Xbox One": [1.5, 0.02], "Xbox Series": [1.5, 0.02], "Mega Drive": [1.5, 0.02], "Dreamcast": [1.5, 0.02],
+  "Game Boy": [1.5, 0.02], "Game Boy Color": [1.5, 0.02], "PC": [1.5, 0.02],
+};
+const fame = (label) => FAME[label] || [2, 0.1];
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function getJson(url, { tries = 6 } = {}) {
@@ -95,7 +106,7 @@ function baseName(name) {
   return n.replace(EDITION, " ").replace(/\s+/g, " ").trim() || n;
 }
 function cleanName(n) {
-  return n.replace(/[™®©]/g, "").replace(/\s+/g, " ").trim();
+  return n.replace(/[™®©]/g, "").replace(/\s*\((19|20)\d\d\)\s*$/, "").replace(/\s+/g, " ").trim();
 }
 
 // ---------- filtro OCR ----------
@@ -190,12 +201,17 @@ async function rawgCandidates(key) {
     if (!slug) { console.log(`RAWG: no encuentro la plataforma ${label}`); continue; }
     let pos = 0;
     let added = 0;
-    for (let page = 1; pos < quota && page <= Math.ceil(quota / 40) + 1; page++) {
+    const [mult, offset] = fame(label);
+    const wantPc = label === "PC";
+    for (let page = 1; pos < quota && page <= Math.min(12, Math.ceil(quota / 40) * 4); page++) {
       const d = await getJson(`https://api.rawg.io/api/games?key=${key}&platforms=${slugToId[slug]}&ordering=-added&page_size=40&page=${page}${extra}`);
       if (!d?.results) break;
       for (const g of d.results) {
         if (pos >= quota) break;
-        const pct = pos++ / quota;
+        // Los juegos que también están en PC casi siempre salen ya de Steam: no gastan cupo
+        const onPc = (g.platforms || []).some((p) => p.platform?.slug === "pc");
+        const pct = offset + (pos / quota) * mult;
+        if (wantPc || !onPc) pos++;
         if (seen.has(g.id)) continue;
         if (g.esrb_rating?.slug === "adults-only") continue;
         if ((g.tags || []).some((t) => /nsfw|sexual|hentai|nudity/.test(t.slug))) continue;
@@ -309,11 +325,13 @@ function merge(dir) {
   games = games.filter((g) => !NOT_GAMES.test(g.name));
   games.sort((a, b) => a.rank - b.rank);
   // el mismo juego en varias tiendas o ediciones: se queda el más popular
-  const seen = new Set();
+  // (mismo nombre pero años muy distintos, como God of War de 2005 y de 2018, son juegos distintos)
+  const seen = new Map();
   games = games.filter((g) => {
     const k = baseName(g.name);
-    if (seen.has(k)) return false;
-    seen.add(k);
+    const years = seen.get(k) || [];
+    if (years.some((y) => !y || !g.year || Math.abs(y - g.year) <= 3)) return false;
+    seen.set(k, [...years, g.year]);
     return true;
   });
   games = games.slice(0, MAX_GAMES);
