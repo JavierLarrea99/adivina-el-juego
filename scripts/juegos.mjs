@@ -12,7 +12,9 @@ const MAX_CANDIDATES = 2600; // se piden más de los que se quedan, porque algun
 const MAX_GAMES = 1600;
 const MIN_SHOTS = 4;
 const SHOTS_PER_GAME = 10;
-const DELAY_MS = 1600; // Steam permite ~200 peticiones cada 5 minutos por IP
+const DELAY_MS = 1600;
+// Programas que Steam marca como "juego" pero no lo son
+export const NOT_GAMES = /wallpaper engine|soundpad|rpg maker|gamemaker studio|vtube studio|lossless scaling|steamvr|source sdk|dedicated server|playtest|benchmark|\bdemo\b|soundtrack|blender|aseprite|krita|clip studio/i; // Steam permite ~200 peticiones cada 5 minutos por IP
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,7 +71,7 @@ async function shard(i, n) {
     const d = data?.[id];
     if (!d?.success) continue;
     const g = d.data;
-    if (g.type !== "game") continue;
+    if (g.type !== "game" || NOT_GAMES.test(g.name)) continue;
     const adult = (g.content_descriptors?.ids || []).some((x) => x === 3 || x === 4);
     if (adult) continue;
     const shots = (g.screenshots || []).map((s) => s.path_full).filter(Boolean);
@@ -98,6 +100,7 @@ function merge(dir) {
     }
   })(dir);
   let games = files.flatMap((f) => JSON.parse(fs.readFileSync(f, "utf8")));
+  games = games.filter((g) => !NOT_GAMES.test(g.name));
   games.sort((a, b) => a.rank - b.rank);
   // nombres repetidos (relanzamientos): se queda el más popular
   const seen = new Set();

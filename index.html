@@ -417,31 +417,39 @@ function shotUrl(id, s) {
   const host = h === "a" ? "shared.akamai.steamstatic.com" : h === "f" ? "shared.fastly.steamstatic.com" : h;
   return `https://${host}/${st === "1" ? "store_item_assets/" : ""}steam/apps/${id}/${file}`;
 }
+// Ediciones del mismo juego cuentan como el mismo: "GTA V Legacy" = "GTA V Enhanced"
+const EDITION = /\b(legacy|enhanced edition|enhanced|remastered|remaster|special edition|definitive edition|game of the year edition|goty edition|goty|complete edition|anniversary edition|directors cut|intergrade)\b/g;
+const EXTRA = { "counter strike 2": ["csgo", "cs go", "counter strike global offensive"] };
 function prepareGames(raw) {
   GAMES = raw.map(([id, name, year, ss], rank) => {
     const n = norm(name);
     const tok = n.split(" ");
     const compact = tok.join("");
-    const keys = new Set([compact]);
-    // siglas: "grand theft auto 5" -> gta5 y gta; "counter strike 2" -> cs2
-    const initials = tok.map((w) => (/^\d+$/.test(w) ? w : w[0])).join("");
-    if (initials.length >= 2) keys.add(initials);
-    const letters = tok.filter((w) => !/^\d+$/.test(w)).map((w) => w[0]).join("");
-    if (letters.length >= 2) keys.add(letters);
-    // "gtav", "rdrii": el número también como romano
-    for (const k of [...keys]) { const m = k.match(/^(.*?)(\d+)$/); if (m && TO_ROMAN[m[2]]) keys.add(m[1] + TO_ROMAN[m[2]]); }
+    const base = n.replace(EDITION, " ").replace(/\s+/g, " ").trim() || n;
+    const keys = new Set([compact, base.replace(/ /g, "")]);
+    for (const t of new Set([n, base])) {
+      const tk = t.split(" ");
+      // siglas: "grand theft auto 5" -> gta5 y gta; "counter strike 2" -> cs2
+      const initials = tk.map((w) => (/^\d+$/.test(w) ? w : w[0])).join("");
+      if (initials.length >= 2) keys.add(initials);
+      const letters = tk.filter((w) => !/^\d+$/.test(w)).map((w) => w[0]).join("");
+      if (letters.length >= 2) keys.add(letters);
+    }
     // nombre sin subtítulo: "the witcher 3 wild hunt" -> también "the witcher 3"
-    const main = norm(name.split(/[:–—]| - /)[0]);
+    const main = norm(name.split(/[:\u2013\u2014]| - /)[0]);
     if (main && main !== n) keys.add(main.replace(/ /g, ""));
     // apodos de sagas que la gente usa
     for (const [phrase, abbr] of SAGAS) {
-      if (!n.includes(phrase)) continue;
-      const rest = n.replace(phrase, "").trim();
+      if (!base.includes(phrase)) continue;
+      const rest = base.replace(phrase, "").trim();
       const num = (rest.match(/^\d+/) || [""])[0];
       keys.add(abbr + num);
       keys.add((abbr + rest).replace(/ /g, ""));
     }
-    return { id, name, year, rank, ss: ss.map((s) => shotUrl(id, s)), n, tok, compact, keys: [...keys] };
+    for (const a of EXTRA[base] || []) keys.add(a.replace(/ /g, ""));
+    // "gtav", "rdrii": el número también como romano
+    for (const k of [...keys]) { const m = k.match(/^(.*?)(\d+)$/); if (m && TO_ROMAN[m[2]]) keys.add(m[1] + TO_ROMAN[m[2]]); }
+    return { id, name, year, rank, ss: ss.map((s) => shotUrl(id, s)), n, base, tok, compact, keys: [...keys] };
   });
   BY_ID = new Map(GAMES.map((g) => [g.id, g]));
 }
@@ -654,10 +662,13 @@ const Host = {
 
   pick() {
     const size = this.settings.pool ? Math.min(this.settings.pool, GAMES.length) : GAMES.length;
-    let pool = GAMES.slice(0, size).filter((g) => !this.used.has(g.id));
-    if (!pool.length) { this.used.clear(); pool = GAMES.slice(0, size); }
+    // una sola edición de cada juego, y sin repetir hasta agotar la lista
+    const seen = new Set();
+    const all = GAMES.slice(0, size).filter((g) => !seen.has(g.base) && seen.add(g.base));
+    let pool = all.filter((g) => !this.used.has(g.base));
+    if (!pool.length) { this.used.clear(); pool = all; }
     const g = pool[Math.floor(Math.random() * pool.length)];
-    this.used.add(g.id);
+    this.used.add(g.base);
     // la primera captura de Steam suele ser arte con el logo: mejor evitarla
     const from = g.ss.length > 2 ? 1 : 0;
     const img = g.ss[from + Math.floor(Math.random() * (g.ss.length - from))];
@@ -695,7 +706,7 @@ const Host = {
   guess(p, gameId) {
     if (this.phase !== "round" || p.done || p.tries <= 0 || !BY_ID.has(gameId)) return;
     const g = BY_ID.get(gameId);
-    if (gameId === this.current.gameId) {
+    if (gameId === this.current.gameId || g.base === BY_ID.get(this.current.gameId).base) {
       const total = this.settings.time * 1000;
       const left = Math.max(0, total - (Date.now() - this.startedAt));
       const bonus = this.correct === 0 ? 3 : this.correct === 1 ? 1 : 0;
