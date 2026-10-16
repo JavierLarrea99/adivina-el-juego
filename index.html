@@ -422,7 +422,8 @@ function shotUrl(id, s) {
 const EDITION = /\b(legacy|enhanced edition|enhanced|remastered|remaster|special edition|definitive edition|game of the year edition|goty edition|goty|complete edition|anniversary edition|directors cut|intergrade|deluxe)\b/g;
 const EXTRA = { "counter strike 2": ["csgo", "cs go", "counter strike global offensive"] };
 function meta(g) {
-  return [g.year, g.plat && g.plat !== "PC" ? g.plat : ""].filter(Boolean).join(" · ");
+  // Solo el año: la consola que da RAWG no siempre es la original (p. ej. juegos de Wii U marcados como Switch)
+  return g.year ? String(g.year) : "";
 }
 function prepareGames(raw) {
   GAMES = raw.map(([id, name, year, ss, plat], rank) => {
