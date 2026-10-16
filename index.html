@@ -352,7 +352,7 @@ footer a { color: inherit; }
 </div>
 <div class="toast" id="toast" hidden></div>
 
-<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script src="vendor/peerjs.min.js"></script>
 <script>
 "use strict";
 /* =========================================================
@@ -523,12 +523,35 @@ function sendToHost(msg) {
   else if (hostConn && hostConn.open) hostConn.send(msg);
 }
 
+const BLOCKED_TIPS = "Suele ser un bloqueador de anuncios, el escudo del navegador (Brave, Opera), una extensión que bloquea WebRTC o el antivirus. Desactívalo para esta página, o prueba con otro navegador o con otra red (WiFi o datos).";
+
+// Comprueba que el navegador deja hacer conexiones entre jugadores
+function netReady() {
+  if (typeof Peer === "undefined") {
+    fail("No se ha podido cargar la conexión", "Algo ha bloqueado una parte de la página. " + BLOCKED_TIPS);
+    return false;
+  }
+  if (typeof RTCPeerConnection === "undefined") {
+    fail("Tu navegador bloquea las partidas", "Este navegador tiene desactivadas las conexiones entre jugadores (WebRTC). " + BLOCKED_TIPS);
+    return false;
+  }
+  return true;
+}
+function makePeer(id) {
+  try { return id ? new Peer(id) : new Peer(); }
+  catch (e) { fail("No se ha podido conectar", "Error al iniciar la conexión. " + BLOCKED_TIPS); return null; }
+}
+
 function startAsHost(name, attempt = 0) {
+  if (!netReady()) return;
   isHost = true;
   code = makeCode();
   setNet("Creando sala…");
-  peer = new Peer(PREFIX + code.toLowerCase());
+  peer = makePeer(PREFIX + code.toLowerCase());
+  if (!peer) return;
+  const openTimer = setTimeout(() => fail("No se ha podido crear la sala", "No llegamos al servidor que une a los jugadores. " + BLOCKED_TIPS), 15000);
   peer.on("open", () => {
+    clearTimeout(openTimer);
     setNet("");
     Host.init(code);
     myId = Host.addLocal(name, token());
@@ -537,6 +560,7 @@ function startAsHost(name, attempt = 0) {
   });
   peer.on("connection", (conn) => Host.accept(conn));
   peer.on("error", (err) => {
+    clearTimeout(openTimer);
     if (err.type === "unavailable-id" && attempt < 5) { peer.destroy(); startAsHost(name, attempt + 1); return; }
     if (err.type === "peer-unavailable") return; // un jugador que se fue
     fail("No se ha podido crear la sala", netErrorText(err));
@@ -545,19 +569,25 @@ function startAsHost(name, attempt = 0) {
 }
 
 function joinAsClient(name, roomCode) {
+  if (!netReady()) return;
   isHost = false;
   code = roomCode;
   setNet("Conectando…");
   if (peer) peer.destroy();
-  peer = new Peer();
+  peer = makePeer();
+  if (!peer) return;
+  const openTimer = setTimeout(() => fail("No se ha podido conectar", "No llegamos al servidor que une a los jugadores. " + BLOCKED_TIPS), 15000);
   peer.on("open", () => {
+    clearTimeout(openTimer);
+    setNet("Conectando con el anfitrión…");
     hostConn = peer.connect(PREFIX + code.toLowerCase(), { reliable: true });
-    const t = setTimeout(() => { if (!S) fail("No se encuentra la sala", `No hay ninguna partida abierta con el código ${code}. Comprueba el código o pide un enlace nuevo.`); }, 12000);
+    const t = setTimeout(() => { if (!S) fail("No se puede conectar con el anfitrión", `La sala ${code} existe, pero tu navegador no consigue conectar con el del anfitrión. ` + BLOCKED_TIPS + " Si nada funciona, que cree la partida otra persona."); }, 15000);
     hostConn.on("open", () => { setNet(""); hostConn.send({ t: "hello", name, token: token() }); });
     hostConn.on("data", (msg) => { clearTimeout(t); onMessage(msg); });
     hostConn.on("close", () => { if (!manualLeave) fail("Se ha perdido la conexión", "El anfitrión ha cerrado la partida o se ha caído la conexión."); });
   });
   peer.on("error", (err) => {
+    clearTimeout(openTimer);
     if (err.type === "peer-unavailable") fail("No se encuentra la sala", `No hay ninguna partida abierta con el código ${code}. Comprueba el código o pide un enlace nuevo.`);
     else fail("Problema de conexión", netErrorText(err));
   });
