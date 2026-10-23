@@ -46,11 +46,14 @@ CLIP_STRONG = 0.30     # probabilidad de una sola clase muy clara (logo, menú, 
 TEXT_COVERAGE = 0.055  # fracción de la imagen ocupada por palabras leídas con seguridad
 TEXT_WORDS = 45        # o muchas palabras
 WEAK_MENU_HITS = 3     # palabras sueltas de menú necesarias para considerarlo menú
-DARK_MEAN = 16         # brillo medio por debajo del cual es "pantalla negra"
-FLAT_STD = 10          # contraste por debajo del cual es "pantalla lisa"
+DARK_MEAN = 4          # pantalla negra de verdad: casi sin brillo...
+DARK_STD = 6           # ...y casi sin contraste (los juegos oscuros no entran aquí)
+FLAT_STD = 3           # pantalla de un solo color
 
 # ---------------- descripciones para CLIP ----------------
-# (texto, True si es una captura buena)
+# (texto, True = captura buena, False = descartar, None = neutra: no cuenta para descartar)
+# "Pantalla de carga", "arte conceptual" y "arte promocional" se confunden con capturas normales
+# de juegos con mucho estilo, así que solo sirven para que el modelo tenga más opciones.
 PROMPTS = [
     ("a screenshot of gameplay from a video game", True),
     ("an in-game screenshot of a 3D video game", True),
@@ -74,22 +77,28 @@ PROMPTS = [
     ("a video game title screen with the game's logo", False),
     ("a video game logo", False),
     ("a video game logo in the corner of a screenshot", False),
-    ("a video game loading screen", False),
+    ("a video game loading screen", None),
     ("a video game options menu with settings", False),
     ("a pause menu in a video game", False),
     ("a save file selection screen", False),
     ("a video game credits screen", False),
     ("a black screen", False),
-    ("promotional key art for a video game", False),
+    ("promotional key art for a video game", None),
     ("video game box art", False),
     ("a poster with the title of a video game", False),
     ("a collage of video game screenshots with text", False),
     ("a screen full of text", False),
     ("an image with a large title", False),
     ("a company logo", False),
-    ("concept art painting", False),
+    ("concept art painting", None),
 ]
-GOOD = np.array([g for _, g in PROMPTS])
+BAD = np.array([g is False for _, g in PROMPTS])
+# clases tan claras que basta con que una sola sea probable
+STRONG = np.array([p in (
+    "a video game main menu", "a video game title screen with the game's logo", "a video game logo",
+    "a video game logo in the corner of a screenshot", "a video game options menu with settings",
+    "a save file selection screen", "video game box art", "a poster with the title of a video game",
+    "a company logo") for p, _ in PROMPTS])
 
 # ---------------- texto ----------------
 ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10"}
@@ -98,7 +107,8 @@ STOP = set((
     "super legend legends battle wars war adventure adventures dark night last ultimate origins party saga story "
     "hero heroes star stars city tales quest final total time space dead land lands life black blood king kings "
     "new from with into your return rise fall part chapter episode season vol volume special plus pro edition "
-    "classic classics racing sports soccer football league world tour"
+    "classic classics racing sports soccer football league world tour "
+    "one two three four five six seven eight nine ten first second third"
 ).split())
 STRONG_MENU = [re.compile(p) for p in (
     r"\bpress (start|any|enter|space|the|a button|button)\b", r"\bpush (start|button)\b",
@@ -189,6 +199,27 @@ def ocr(img):
     return words, area / float(w * h)
 
 
+def corner_words(img):
+    """Lee las cuatro esquinas ampliadas: ahí suelen ir los logos pequeños de marca de agua."""
+    import pytesseract
+    w, h = img.size
+    cw, ch = int(w * 0.32), int(h * 0.2)
+    out = []
+    for x, y in ((0, 0), (w - cw, 0), (0, h - ch), (w - cw, h - ch)):
+        crop = img.crop((x, y, x + cw, y + ch)).resize((cw * 2, ch * 2), Image.LANCZOS)
+        try:
+            d = pytesseract.image_to_data(crop, config="--psm 11", output_type=pytesseract.Output.DICT, timeout=20)
+        except Exception:
+            continue
+        for txt, conf in zip(d["text"], d["conf"]):
+            try:
+                if float(conf) >= 55 and sum(c.isalpha() for c in (txt or "")) >= 3:
+                    out.append(txt)
+            except ValueError:
+                pass
+    return out
+
+
 def analyze(item):
     """Descarga y revisa lo que no necesita el modelo de visión."""
     img = download(item["url"])
@@ -201,13 +232,15 @@ def analyze(item):
     item["mean"], item["std"] = float(gray.mean()), float(gray.std())
     words, coverage = ocr(img)
     text = norm(" ".join(words))
+    corner = norm(" ".join(corner_words(img)))
     toks = set(text.split())
     nwords, compact = item["name_words"]
     reasons = []
-    if item["mean"] < DARK_MEAN or item["std"] < FLAT_STD:
+    if (item["mean"] < DARK_MEAN and item["std"] < DARK_STD) or item["std"] < FLAT_STD:
         reasons.append("pantalla negra/lisa")
-    leaked = [w for w in nwords if w in toks]
-    if (len(compact) >= 5 and compact in text.replace(" ", "")) or leaked:
+    ctoks = set(corner.split())
+    leaked = [w for w in nwords if w in toks or w in ctoks]
+    if (len(compact) >= 5 and (compact in text.replace(" ", "") or compact in corner.replace(" ", ""))) or leaked:
         reasons.append("se lee el nombre" + (f" ({leaked[0]})" if leaked else ""))
     strong = next((p.pattern for p in STRONG_MENU if p.search(text)), None)
     weak = {w for w in toks if w in WEAK_MENU} | {p for p in WEAK_MENU_PHRASES if p in text}
@@ -262,14 +295,17 @@ def judge(items, clip):
         chunk = ok[i:i + 32]
         probs = clip.score([it["img"] for it in chunk])
         for it, p in zip(chunk, probs):
-            bad = float(p[~GOOD].sum())
-            top_bad = int(np.argmax(np.where(GOOD, -1, p)))
+            bad = float(p[BAD].sum())
+            top_bad = int(np.argmax(np.where(BAD, p, -1)))
+            top_strong = int(np.argmax(np.where(STRONG, p, -1)))
             it["clip_bad"] = round(bad, 3)
             it["clip_top"] = PROMPTS[int(np.argmax(p))][0]
             it["clip_bad_top"] = PROMPTS[top_bad][0]
             it["clip_bad_top_p"] = round(float(p[top_bad]), 3)
-            if bad > CLIP_REJECT or float(p[top_bad]) > CLIP_STRONG:
+            if bad > CLIP_REJECT:
                 it["reasons"].append(f"visión: {PROMPTS[top_bad][0]}")
+            elif float(p[top_strong]) > CLIP_STRONG:
+                it["reasons"].append(f"visión: {PROMPTS[top_strong][0]}")
     return items
 
 
@@ -384,7 +420,7 @@ def muestra(path, n, salida, seed):
     summary = {
         "juegos": len(pick), "capturas": len(items), "rechazadas": len(rejected), "motivos": counts,
         "juegos_sin_capturas": sum(1 for v in per_game.values() if v[1] == 0),
-        "segundos": round(secs), "umbrales": {"CLIP_REJECT": CLIP_REJECT, "CLIP_STRONG": CLIP_STRONG,
+        "segundos": round(secs), "umbrales": {"DARK_MEAN": DARK_MEAN, "CLIP_REJECT": CLIP_REJECT, "CLIP_STRONG": CLIP_STRONG,
                                                "TEXT_COVERAGE": TEXT_COVERAGE, "TEXT_WORDS": TEXT_WORDS},
         "detalle": [{k: v for k, v in it.items() if k not in ("thumb", "name_words")} for it in items],
     }
