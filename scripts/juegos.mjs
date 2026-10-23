@@ -16,6 +16,9 @@ import { execFile } from "node:child_process";
 const STEAM_CANDIDATES = 2600; // se piden más de los que se quedan, porque algunos se descartan
 const MAX_GAMES = 4200;
 const SHOTS_PER_GAME = 6;
+// Con REVISAR=1 este script no filtra imágenes: deja más capturas y las revisa después scripts/revisar.py
+const REVISAR = process.env.REVISAR === "1";
+const SHOTS_IN = REVISAR ? 10 : SHOTS_PER_GAME;
 const DELAY_MS = 1600; // Steam permite ~200 peticiones cada 5 minutos por IP
 const OCR_PARALLEL = 4;
 const SHARD_BUDGET_MS = 95 * 60 * 1000; // cada trozo guarda lo que tenga antes del límite de GitHub
@@ -226,7 +229,7 @@ async function rawgCandidates(key) {
           name: cleanName(g.name),
           year: g.released ? Number(g.released.slice(0, 4)) : null,
           plat: label,
-          shots: shots.slice(0, SHOTS_PER_GAME),
+          shots: shots.slice(0, SHOTS_IN),
           pct,
         });
       }
@@ -262,12 +265,12 @@ async function steamGame(c) {
     if (g.type === "game" && !adult && !NOT_GAMES.test(g.name)) {
       let shots = (g.screenshots || []).map((s) => s.path_full).filter(Boolean).map((u) => u.split("?")[0]);
       if (shots.length > 4) shots = shots.slice(1); // la primera suele ser arte con el logo
-      shots = shots.slice(0, SHOTS_PER_GAME);
+      shots = shots.slice(0, SHOTS_IN);
       if (shots.length >= 3) {
         const year = (g.release_date?.date || "").match(/\d{4}/)?.[0];
         const name = cleanName(g.name);
-        shots = await filterShots(name, shots);
-        if (shots.length >= 2) game = { id: c.id, rank: c.rank, name, year: year ? Number(year) : null, plat: "PC", ss: shots };
+        if (!REVISAR) shots = await filterShots(name, shots);
+        if (shots.length >= (REVISAR ? 1 : 2)) game = { id: c.id, rank: c.rank, name, year: year ? Number(year) : null, plat: "PC", ss: shots };
       }
     }
   }
@@ -277,8 +280,8 @@ async function steamGame(c) {
 }
 
 async function rawgGame(c) {
-  const shots = await filterShots(c.name, c.shots);
-  if (shots.length < 2) return null;
+  const shots = REVISAR ? c.shots : await filterShots(c.name, c.shots);
+  if (shots.length < (REVISAR ? 1 : 2)) return null;
   return { id: c.id, rank: c.rank, name: c.name, year: c.year, plat: c.plat, ss: shots };
 }
 

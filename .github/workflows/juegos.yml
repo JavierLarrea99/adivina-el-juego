@@ -46,9 +46,26 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: candidates
-      - name: Instalar lector de texto (OCR)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-eng
-      - run: node scripts/juegos.mjs shard ${{ matrix.i }} 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - name: Instalar revisor de capturas (visión + lector de texto)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-eng
+          pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -q -r scripts/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: clip-vit-b-32-laion2b-v1
+      - name: Datos de los juegos
+        run: node scripts/juegos.mjs shard ${{ matrix.i }} 20
+        env:
+          REVISAR: "1"
+      - name: Revisar capturas
+        run: python scripts/revisar.py filtrar part-${{ matrix.i }}.json
       - uses: actions/upload-artifact@v4
         with:
           name: part-${{ matrix.i }}
