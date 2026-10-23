@@ -1,0 +1,46 @@
+name: Unir resultados de una ejecución
+
+# Por si el último paso de "Actualizar juegos" falla: vuelve a unir los trozos ya revisados
+# de esa ejecución sin repetir todo el trabajo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Número de la ejecución de 'Actualizar juegos'"
+        required: true
+
+permissions:
+  contents: write
+  pages: write
+  actions: read
+
+jobs:
+  unir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: parts
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - run: node scripts/juegos.mjs merge parts
+      - name: Guardar
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add data/games.json
+          git diff --cached --quiet && echo "Sin cambios" && exit 0
+          git commit -m "Actualizar lista de juegos"
+          git pull --rebase -q origin main
+          git push
+      - name: Publicar web
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST repos/${{ github.repository }}/pages/builds || true
